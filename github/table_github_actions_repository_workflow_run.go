@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/google/go-github/v55/github"
 
@@ -19,6 +20,7 @@ func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
 			Hydrate:           tableGitHubRepoWorkflowRunList,
 			KeyColumns: []*plugin.KeyColumn{
 				{Name: "repository_full_name", Require: plugin.Required},
+				{Name: "workflow_id", Require: plugin.Optional},
 				{Name: "event", Require: plugin.Optional},
 				{Name: "head_branch", Require: plugin.Optional},
 				{Name: "status", Require: plugin.Optional},
@@ -26,7 +28,11 @@ func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
 			},
 		},
 		Get: &plugin.GetConfig{
-			KeyColumns:        plugin.AllColumns([]string{"repository_full_name", "id"}),
+			KeyColumns: []*plugin.KeyColumn{
+				{Name: "repository_full_name", Require: plugin.Required, Operators: []string{"="}},
+				{Name: "id", Require: plugin.Required, Operators: []string{"="}},
+				{Name: "run_attempt", Require: plugin.Optional, Operators: []string{"="}, CacheMatch: "exact"},
+			},
 			ShouldIgnoreError: isNotFoundError([]string{"404"}),
 			Hydrate:           tableGitHubRepoWorkflowRunGet,
 		},
@@ -49,6 +55,7 @@ func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
 			{Name: "jobs_url", Type: proto.ColumnType_STRING, Description: "The address for the workflow job GitHub web page."},
 			{Name: "logs_url", Type: proto.ColumnType_STRING, Description: "The address for the workflow logs GitHub web page."},
 			{Name: "rerun_url", Type: proto.ColumnType_STRING, Description: "The address for workflow rerun GitHub web page."},
+			{Name: "previous_attempt_url", Type: proto.ColumnType_STRING, Description: "The address for the previous attempt GitHub web page."},
 			{Name: "url", Type: proto.ColumnType_STRING, Description: "The address for the workflow run GitHub web page.", Transform: transform.FromField("URL")},
 			{Name: "workflow_url", Type: proto.ColumnType_STRING, Description: "The address for workflow GitHub web page."},
 
@@ -58,6 +65,7 @@ func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
 			{Name: "head_repository", Type: proto.ColumnType_JSON, Description: "The head repository info for the workflow run."},
 			{Name: "pull_requests", Type: proto.ColumnType_JSON, Description: "The pull request details for the workflow run."},
 			{Name: "repository", Type: proto.ColumnType_JSON, Description: "The repository info for the workflow run."},
+			{Name: "run_attempt", Type: proto.ColumnType_INT, Description: "The attempt number of the workflow run."},
 			{Name: "run_started_at", Type: proto.ColumnType_TIMESTAMP, Transform: transform.FromField("RunStartedAt").Transform(convertTimestamp), Description: "Time when the workflow run was started."},
 			{Name: "updated_at", Type: proto.ColumnType_TIMESTAMP, Transform: transform.FromField("UpdatedAt").Transform(convertTimestamp), Description: "Time when the workflow run was updated."},
 			{Name: "actor", Type: proto.ColumnType_JSON, Description: "The user whom initiated the first instance of this workflow run."},
@@ -110,8 +118,28 @@ func tableGitHubRepoWorkflowRunList(ctx context.Context, d *plugin.QueryData, h 
 		}
 	}
 
+	var workflowId int64
+	if equalQuals["workflow_id"] != nil {
+		if equalQuals["workflow_id"].GetStringValue() != "" {
+			workflowId_, err := strconv.ParseInt(equalQuals["workflow_id"].GetStringValue(), 10, 64)
+			if err != nil {
+				panic(err)
+			}
+			workflowId = workflowId_
+		}
+	}
+
 	for {
-		workflowRuns, resp, err := client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, opts)
+		var (
+			workflowRuns *github.WorkflowRuns
+			resp         *github.Response
+			err          error
+		)
+		if workflowId != 0 {
+			workflowRuns, resp, err = client.Actions.ListWorkflowRunsByID(ctx, owner, repo, workflowId, opts)
+		} else {
+			workflowRuns, resp, err = client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, opts)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +167,7 @@ func tableGitHubRepoWorkflowRunList(ctx context.Context, d *plugin.QueryData, h 
 
 func tableGitHubRepoWorkflowRunGet(ctx context.Context, d *plugin.QueryData, h *plugin.HydrateData) (interface{}, error) {
 	runId := d.EqualsQuals["id"].GetInt64Value()
+	runAttempt := int(d.EqualsQuals["run_attempt"].GetInt64Value())
 	orgName := d.EqualsQuals["repository_full_name"].GetStringValue()
 
 	// Empty check for the parameters
@@ -147,11 +176,20 @@ func tableGitHubRepoWorkflowRunGet(ctx context.Context, d *plugin.QueryData, h *
 	}
 
 	owner, repo := parseRepoFullName(orgName)
-	plugin.Logger(ctx).Trace("tableGitHubRepoWorkflowRunGet", "owner", owner, "repo", repo, "runId", runId)
+	plugin.Logger(ctx).Trace("tableGitHubRepoWorkflowRunGet", "owner", owner, "repo", repo, "runId", runId, "runAttempt", runAttempt)
 
 	client := connect(ctx, d)
 
-	workflowRun, _, err := client.Actions.GetWorkflowRunByID(ctx, owner, repo, runId)
+	var (
+		workflowRun *github.WorkflowRun
+		err         error
+	)
+	if runAttempt != 0 {
+		opts := &github.WorkflowRunAttemptOptions{}
+		workflowRun, _, err = client.Actions.GetWorkflowRunAttempt(ctx, owner, repo, runId, runAttempt, opts)
+	} else {
+		workflowRun, _, err = client.Actions.GetWorkflowRunByID(ctx, owner, repo, runId)
+	}
 	if err != nil {
 		return nil, err
 	}

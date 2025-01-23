@@ -9,6 +9,7 @@ import (
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin/transform"
+	"github.com/turbot/steampipe-plugin-sdk/v5/query_cache"
 )
 
 func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
@@ -31,7 +32,7 @@ func tableGitHubActionsRepositoryWorkflowRun() *plugin.Table {
 			KeyColumns: []*plugin.KeyColumn{
 				{Name: "repository_full_name", Require: plugin.Required, Operators: []string{"="}},
 				{Name: "id", Require: plugin.Required, Operators: []string{"="}},
-				{Name: "run_attempt", Require: plugin.Optional, Operators: []string{"="}, CacheMatch: "exact"},
+				{Name: "run_attempt", Require: plugin.Optional, Operators: []string{"="}, CacheMatch: query_cache.CacheMatchExact},
 			},
 			ShouldIgnoreError: isNotFoundError([]string{"404"}),
 			Hydrate:           tableGitHubRepoWorkflowRunGet,
